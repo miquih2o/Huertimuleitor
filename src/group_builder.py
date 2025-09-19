@@ -1,101 +1,127 @@
 #!/usr/bin/env python3
 import sqlite3
-import os
+import json
 
 class GroupBuilder:
     def __init__(self, db_path="src/data/species.db"):
         self.db_path = db_path
     
-    def get_all_plants(self):
-        """Get all plants with fixed numbering"""
+    def _search_plants(self, search_term):
+        """Fuzzy search across all plant names"""
         conn = sqlite3.connect(self.db_path)
-        plants = []
-        try:
-            result = conn.execute("SELECT latin_name, english_name FROM species ORDER BY english_name")
-            plants = [(row[0], row[1]) for row in result]
-        except:
-            plants = [("Solanum_lycopersicum", "Tomato"), ("Ocimum_basilicum", "Basil")]
+        plants = conn.execute(
+            "SELECT latin_name, english_name, spanish_name FROM species"
+        ).fetchall()
         conn.close()
-        return plants
+        
+        matches = []
+        search_term = search_term.lower().strip()
+        
+        for latin, english, spanish in plants:
+            if (search_term in english.lower() or 
+                search_term in spanish.lower() or 
+                search_term in latin.lower()):
+                matches.append((latin, english, spanish))
+        
+        return matches
     
-    def show_plant_catalog(self, all_plants):
-        """Clear screen and show plant catalog"""
-        os.system('clear' if os.name == 'posix' else 'cls')
-        print("🌱 FARMER GROUP BUILDER")
-        print("Create companion groups using fixed plant numbers")
-        print("=" * 50)
-        print("\n📋 PLANT CATALOG (Always same numbers):")
-        for i, (latin, english) in enumerate(all_plants, 1):
-            print(f"{i:2d}. {english}")
-        print("=" * 50)
+    def _display_matches(self, matches):
+        """Show search results clearly"""
+        if not matches:
+            print("❌ No matches found")
+            return
+        
+        print(f"\n🔍 Found {len(matches)} matches:")
+        for i, (latin, english, spanish) in enumerate(matches, 1):
+            print(f"{i}. {english} ({spanish}) - {latin}")
     
     def build_groups(self):
-        """Fixed-list group building with always-visible catalog"""
-        all_plants = self.get_all_plants()
+        """Smart search-based group building"""
+        print("🌱 SMART PLANT SELECTION")
+        print("==================================================")
+        print("🔍 Type plant names to search (partial names work)")
+        print("   'list' - show all plants")
+        print("   'done' - finish group")
+        print("   'view' - show current groups")
+        print("   'finish' - complete all grouping")
+        print("==================================================")
         
         groups = []
         current_group = []
+        all_used_plants = set()
         
         while True:
-            self.show_plant_catalog(all_plants)
-            
-            print(f"Current group: {[all_plants[i-1][1] for i in current_group] if current_group else 'Empty'}")
+            print(f"\nCurrent group: {[p[1] for p in current_group] if current_group else 'Empty'}")
             print(f"Total groups: {len(groups)}")
-            print("\nOptions:")
-            print("  [1-8]    - Add plant to current group")
-            print("  'done'   - Finish current group")
-            print("  'remove' - Remove last plant")  
-            print("  'clear'  - Clear current group")
-            print("  'view'   - Show all groups")
-            print("  'finish' - Complete grouping")
             
-            choice = input("\nYour choice: ").strip().lower()
+            search_term = input("\nSearch for plant: ").strip()
             
-            if choice == 'finish':
+            if search_term.lower() == 'finish':
                 if current_group:
                     groups.append(current_group)
                 break
-            elif choice == 'done':
+            
+            elif search_term.lower() == 'done':
                 if current_group:
                     groups.append(current_group)
+                    print(f"✅ Group {len(groups)} completed!")
                     current_group = []
-                continue
-            elif choice == 'remove':
-                if current_group:
-                    current_group.pop()
-                continue
-            elif choice == 'clear':
-                current_group = []
-                continue
-            elif choice == 'view':
-                print("\n📊 ALL GROUPS:")
-                for i, group in enumerate(groups, 1):
-                    plants = [all_plants[idx-1][1] for idx in group]
-                    print(f"Group {i}: {', '.join(plants)}")
-                input("\nPress Enter to continue...")
-                continue
+                else:
+                    print("ℹ️ Current group is empty")
             
-            # Process plant numbers
-            try:
-                numbers = [int(x.strip()) for x in choice.split(",")]
-                for num in numbers:
-                    if 1 <= num <= len(all_plants) and num not in current_group:
-                        current_group.append(num)
-            except ValueError:
-                continue
+            elif search_term.lower() == 'view':
+                print("\n📊 CURRENT GROUPS:")
+                for i, group in enumerate(groups, 1):
+                    plants = [f"{english} ({latin})" for latin, english, spanish in group]
+                    print(f"Group {i}: {', '.join(plants)}")
+            
+            elif search_term.lower() == 'list':
+                conn = sqlite3.connect(self.db_path)
+                all_plants = conn.execute(
+                    "SELECT latin_name, english_name, spanish_name FROM species ORDER BY english_name"
+                ).fetchall()
+                conn.close()
+                
+                print("\n📋 ALL PLANTS:")
+                for latin, english, spanish in all_plants:
+                    print(f"  - {english} ({spanish}) - {latin}")
+            
+            else:
+                matches = self._search_plants(search_term)
+                if matches:
+                    self._display_matches(matches)
+                    
+                    try:
+                        choice = input("Select number (or Enter to search again): ").strip()
+                        if choice.isdigit():
+                            index = int(choice) - 1
+                            if 0 <= index < len(matches):
+                                selected_plant = matches[index]
+                                
+                                # Check if plant already in current group
+                                if selected_plant[0] in [p[0] for p in current_group]:
+                                    print(f"ℹ️ {selected_plant[1]} already in current group")
+                                else:
+                                    current_group.append(selected_plant)
+                                    all_used_plants.add(selected_plant[0])
+                                    print(f"✅ Added: {selected_plant[1]}")
+                            else:
+                                print("❌ Invalid selection")
+                    except ValueError:
+                        print("❌ Please enter a number")
+                else:
+                    print("❌ No plants found. Try different search terms.")
         
-        # Convert to plant format
+        # Convert to the format expected by the main application
         final_groups = []
         for group in groups:
-            plant_group = []
-            for plant_num in group:
-                latin, english = all_plants[plant_num-1]
-                plant_group.append(f"{latin} ({english})")
+            plant_group = [f"{latin} ({english})" for latin, english, spanish in group]
             final_groups.append(plant_group)
         
         return final_groups
 
 if __name__ == "__main__":
     builder = GroupBuilder()
+    print("Testing smart group builder...")
     groups = builder.build_groups()
     print(f"\n🎉 Final groups: {groups}")
